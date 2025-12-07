@@ -5,41 +5,40 @@
   <title>Kayak Tournament Dashboard</title>
   <link rel="stylesheet" href="style.css" />
 </head>
-
 <body>
-  <header>
-    <h1>Kayak Tournament Dashboard</h1>
-    <div>
+  <header class="app-header">
+    <div class="header-left">
+      <!-- Optional logo slot -->
+      <!-- <img src="logo.png" class="logo" alt="Logo" /> -->
+      <h1>Kayak Tournament Dashboard</h1>
+    </div>
+    <div class="header-right">
       <label for="eventSelect">Event:</label>
       <select id="eventSelect"></select>
     </div>
   </header>
 
-  <main>
-    <div class="tabs">
-      <div class="tab active" data-tab="total">Total Leaderboard</div>
-      <div class="tab" data-tab="day1">Day 1</div>
-      <div class="tab" data-tab="day2">Day 2</div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="total">Total Leaderboard</button>
+    <button class="tab" data-tab="day1">Day 1</button>
+    <button class="tab" data-tab="day2">Day 2</button>
+    <button class="tab" data-tab="season">Season Summary</button>
+  </nav>
+
+  <!-- KPI strip -->
+  <section class="kpi-row" id="kpiRow">
+    <div class="kpi-card">
+      <div class="kpi-label">Anglers</div>
+      <div class="kpi-value" id="kpiAnglers">–</div>
     </div>
-
-    <div id="total" class="tab-content active">
-      <table id="totalTable"></table>
+    <div class="kpi-card">
+      <div class="kpi-label">Fish Submitted</div>
+      <div class="kpi-value" id="kpiFishCount">–</div>
     </div>
-
-    <div id="day1" class="tab-content">
-      <table id="day1Table"></table>
+    <div class="kpi-card">
+      <div class="kpi-label">Avg Length</div>
+      <div class="kpi-value" id="kpiAvgLength">–</div>
     </div>
-
-    <div id="day2" class="tab-content">
-      <table id="day2Table"></table>
-    </div>
-
-    <aside id="anglerPanel">
-      <h2>Angler Detail</h2>
-      <div id="anglerDetail"></div>
-    </aside>
-  </main>
-
-  <script src="app.js"></script>
-</body>
-</html>
+    <div class="kpi-card">
+      <div class="kpi-label">Big Bass</div>
+      <div class="kpi-value" id="kpiBigBass">
