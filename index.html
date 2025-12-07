@@ -8,37 +8,80 @@
 <body>
   <header class="app-header">
     <div class="header-left">
-      <!-- Optional logo slot -->
-      <!-- <img src="logo.png" class="logo" alt="Logo" /> -->
       <h1>Kayak Tournament Dashboard</h1>
     </div>
     <div class="header-right">
-      <label for="eventSelect">Event:</label>
-      <select id="eventSelect"></select>
+      <span class="brand-pill">Live Series Overview</span>
     </div>
   </header>
 
-  <nav class="tabs">
-    <button class="tab active" data-tab="total">Total Leaderboard</button>
-    <button class="tab" data-tab="day1">Day 1</button>
-    <button class="tab" data-tab="day2">Day 2</button>
-    <button class="tab" data-tab="season">Season Summary</button>
-  </nav>
+  <main class="app-main">
+    <!-- View 1: Events List -->
+    <section id="eventsView" class="view active">
+      <div class="view-header">
+        <h2>Series Events</h2>
+        <p class="view-subtitle">Click any event to see full angler details.</p>
+      </div>
 
-  <!-- KPI strip -->
-  <section class="kpi-row" id="kpiRow">
-    <div class="kpi-card">
-      <div class="kpi-label">Anglers</div>
-      <div class="kpi-value" id="kpiAnglers">–</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Fish Submitted</div>
-      <div class="kpi-value" id="kpiFishCount">–</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Avg Length</div>
-      <div class="kpi-value" id="kpiAvgLength">–</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Big Bass</div>
-      <div class="kpi-value" id="kpiBigBass">
+      <div id="eventsTableContainer" class="card">
+        <!-- events table injected here -->
+      </div>
+    </section>
+
+    <!-- View 2: Event Detail -->
+    <section id="eventDetailView" class="view">
+      <div class="view-header detail-header">
+        <div>
+          <button id="backToEvents" class="btn btn-ghost">&larr; Back to Events</button>
+          <h2 id="detailEventTitle">Event Detail</h2>
+          <p id="detailEventSubtitle" class="view-subtitle"></p>
+        </div>
+      </div>
+
+      <section class="detail-layout">
+        <!-- Event meta / KPIs -->
+        <div class="detail-meta card">
+          <div class="meta-grid">
+            <div class="meta-item">
+              <div class="meta-label">Date</div>
+              <div class="meta-value" id="metaDate">–</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Trail</div>
+              <div class="meta-value" id="metaTrail">–</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Season</div>
+              <div class="meta-value" id="metaSeason">–</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Anglers</div>
+              <div class="meta-value" id="metaAnglers">–</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Total Fish</div>
+              <div class="meta-value" id="metaFish">–</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Event Big Bass</div>
+              <div class="meta-value" id="metaBigBass">–</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Angler table -->
+        <div class="detail-table card">
+          <h3>Angler Results</h3>
+          <div id="anglerTableContainer"></div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <div id="statusMessage" class="status">Loading…</div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

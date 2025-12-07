@@ -1,40 +1,25 @@
-// ===============================
-// CONFIG
-// ===============================
-
-// Your deployed Apps Script web app URL ( /exec )
+// ===== CONFIG =====
 const API_BASE =
   "https://script.google.com/macros/s/AKfycbwf7HrqElLy4-VzTfrk0ucShXWFT1mITlz1yYBTEzSHD36SYfbso8eQWyqnfvA79Xv4tA/exec";
 
-// ===============================
-// GLOBAL STATE
-// ===============================
-
+// ===== STATE =====
 const state = {
-  events: [],                  // full events list
-  currentEventId: null,        // selected event_id
-  currentTab: "total",         // 'total' | 'day1' | 'day2'
-  leaderboards: {
-    total: [],
-    day1: [],
-    day2: []
-  }
+  events: [],
+  currentEventId: null,
+  currentEventMeta: null,
+  currentAnglers: []
 };
 
-// Small helper to grab elements safely
-function $(id) {
-  return document.getElementById(id);
-}
+// ===== UTILITIES =====
+const $ = (id) => document.getElementById(id);
 
-// Status message (bottom or wherever you place #statusMessage)
 function setStatus(msg, type = "info") {
   const el = $("statusMessage");
   if (!el) return;
   el.textContent = msg || "";
-  el.className = `status status-${type}`;
+  el.className = `status${type === "error" ? " status-error" : ""}`;
 }
 
-// Format a date string from API into something like "Mar 15, 2025"
 function formatDate(d) {
   if (!d) return "";
   const dt = new Date(d);
@@ -46,141 +31,98 @@ function formatDate(d) {
   });
 }
 
-// Format inches with 2 decimals
-function fmtInches(v) {
+function fmtNumber(v, decimals = 2) {
   if (v == null || v === "") return "";
-  const num = Number(v);
-  if (isNaN(num)) return v;
-  return num.toFixed(2);
+  const n = Number(v);
+  if (isNaN(n)) return v;
+  return n.toFixed(decimals);
 }
 
-// ===============================
-// API CALLS
-// ===============================
-
-async function callApi(params) {
-  const qs = new URLSearchParams(params);
-  const url = `${API_BASE}?${qs.toString()}`;
-
+async function fetchJSON(params) {
+  const qs = new URLSearchParams(params).toString();
+  const url = `${API_BASE}?${qs}`;
   const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} – ${res.statusText}`);
-  }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json();
-  if (!json || json.success === false) {
-    throw new Error(json && json.message ? json.message : "API error");
+  if (json.success === false) {
+    throw new Error(json.message || "API error");
   }
-  return json.data || json; // we expect { success:true, data:{...} }
+  return json.data || json;
 }
 
-// Events list
-async function fetchEvents() {
-  const data = await callApi({ endpoint: "events" });
-  return data.events || [];
+// ===== VIEW SWITCHING =====
+function showView(name) {
+  const eventsView = $("eventsView");
+  const detailView = $("eventDetailView");
+  if (!eventsView || !detailView) return;
+
+  eventsView.classList.toggle("active", name === "events");
+  detailView.classList.toggle("active", name === "detail");
 }
 
-// Leaderboard for an event
-async function fetchLeaderboard(tabKey, eventId) {
-  // Map tab -> endpoint value in Apps Script
-  let endpoint;
-  if (tabKey === "total") endpoint = "leaderboard";
-  else if (tabKey === "day1") endpoint = "day1";
-  else if (tabKey === "day2") endpoint = "day2";
-  else throw new Error(`Unknown tab key: ${tabKey}`);
+// ===== EVENTS LIST =====
+async function loadEvents() {
+  setStatus("Loading events…");
+  try {
+    const data = await fetchJSON({ endpoint: "events" });
+    const events = data.events || [];
 
-  const data = await callApi({
-    endpoint,
-    event_id: eventId
-  });
+    // sort newest first
+    events.sort((a, b) => new Date(b.event_date) - new Date(a.event_date));
 
-  // Allow for either data.rows or data.leaderboard
-  return data.rows || data.leaderboard || data.items || [];
-}
-
-// ===============================
-// RENDER: EVENTS DROPDOWN
-// ===============================
-
-function renderEventDropdown() {
-  const select = $("eventSelect");
-  if (!select) return;
-
-  select.innerHTML = "";
-
-  // Sort events by date desc (latest first)
-  const events = [...state.events].sort(
-    (a, b) => new Date(b.event_date) - new Date(a.event_date)
-  );
-
-  for (const ev of events) {
-    const opt = document.createElement("option");
-    opt.value = ev.event_id;
-    const dateLabel = formatDate(ev.event_date);
-    opt.textContent = `${dateLabel} – ${ev.event_name}`;
-    select.appendChild(opt);
-  }
-
-  if (events.length && !state.currentEventId) {
-    state.currentEventId = events[0].event_id;
-  }
-  if (state.currentEventId) {
-    select.value = state.currentEventId;
+    state.events = events;
+    renderEventsTable();
+    setStatus(`Loaded ${events.length} events.`);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Error loading events: ${err.message}`, "error");
   }
 }
 
-// ===============================
-// RENDER: LEADERBOARD TABLE
-// ===============================
-
-function renderLeaderboard() {
-  const container = $("leaderboardContainer");
+function renderEventsTable() {
+  const container = $("eventsTableContainer");
   if (!container) return;
 
-  const tabKey = state.currentTab;
-  const rows = state.leaderboards[tabKey] || [];
-
+  const rows = state.events;
   if (!rows.length) {
-    container.innerHTML = `
-      <div class="empty-state">
-        No data available for this event/tab.
-      </div>
-    `;
-    $("anglerDetail") && ( $("anglerDetail").innerHTML = "<h3>Angler Detail</h3><p>Select an angler row to see details.</p>" );
+    container.innerHTML = "<p>No events found.</p>";
     return;
   }
 
-  // Build table
   let html = `
-    <table class="leader-table">
+    <table class="table">
       <thead>
         <tr>
-          <th>Rank</th>
-          <th>Angler</th>
-          <th>Total (in)</th>
+          <th>Date</th>
+          <th>Event</th>
+          <th>Trail</th>
+          <th>Winner</th>
           <th>Big Bass (in)</th>
-          <th>Fish Limit</th>
-          <th>Limit %</th>
+          <th>Total Length (in)</th>
+          <th>Anglers</th>
         </tr>
       </thead>
       <tbody>
   `;
 
-  rows.forEach((r, idx) => {
-    const rank = r.rank || r.Rank || r.rk || "";
-    const angler = r.angler || r.Angler || "";
-    const total = fmtInches(r.total_length_in ?? r.total ?? r.total_in);
-    const big = fmtInches(r.big_bass_in ?? r.big_bass ?? r.bb_in);
-    const limit = r.fish_limit ?? r.limit ?? "";
-    const limitPct = r["Limit%"] ?? r.limit_pct ?? "";
+  rows.forEach((ev, idx) => {
+    const date = formatDate(ev.event_date);
+    const name = ev.event_name || ev.event_id;
+    const trail = ev.trail || "";
+    const winner = ev.event_winner || ""; // if you have this field
+    const bigBass = fmtNumber(ev.big_bass_in ?? ev["Big_Bass_in"] ?? ev.big_bass);
+    const totalLen = fmtNumber(ev.total_length_in ?? ev["Total_Length_in"]);
+    const anglers = ev.Anglers ?? ev.anglers ?? "";
 
     html += `
-      <tr data-row-index="${idx}">
-        <td>${rank}</td>
-        <td>${angler}</td>
-        <td>${total}</td>
-        <td>${big}</td>
-        <td>${limit}</td>
-        <td>${limitPct}</td>
+      <tr data-index="${idx}">
+        <td>${date}</td>
+        <td>${name}</td>
+        <td>${trail}</td>
+        <td>${winner || ""}</td>
+        <td>${bigBass || ""}</td>
+        <td>${totalLen || ""}</td>
+        <td>${anglers || ""}</td>
       </tr>
     `;
   });
@@ -192,223 +134,148 @@ function renderLeaderboard() {
 
   container.innerHTML = html;
 
-  // Bind row click -> angler detail
   const tbody = container.querySelector("tbody");
-  if (tbody) {
-    tbody.addEventListener("click", (e) => {
-      const tr = e.target.closest("tr");
-      if (!tr) return;
-      const idx = Number(tr.getAttribute("data-row-index"));
-      const row = rows[idx];
-      if (row) {
-        renderAnglerDetail(row);
-        // highlight selected
-        tbody.querySelectorAll("tr").forEach(r => r.classList.remove("selected"));
-        tr.classList.add("selected");
-      }
-    });
-  }
-
-  // Show detail for top row by default
-  renderAnglerDetail(rows[0]);
+  tbody.addEventListener("click", (e) => {
+    const tr = e.target.closest("tr");
+    if (!tr) return;
+    const idx = Number(tr.dataset.index);
+    const ev = rows[idx];
+    if (!ev) return;
+    onSelectEvent(ev);
+  });
 }
 
-// ===============================
-// RENDER: ANGLER DETAIL PANEL
-// ===============================
+function onSelectEvent(ev) {
+  state.currentEventId = ev.event_id;
+  state.currentEventMeta = ev;
+  loadEventDetail();
+}
 
-function renderAnglerDetail(row) {
-  const panel = $("anglerDetail");
-  if (!panel) return;
+// ===== EVENT DETAIL =====
+async function loadEventDetail() {
+  if (!state.currentEventId) return;
+  showView("detail");
+  setStatus("Loading event detail…");
 
-  if (!row) {
-    panel.innerHTML = `
-      <h3>Angler Detail</h3>
-      <p>Select an angler row to see details.</p>
-    `;
+  try {
+    const data = await fetchJSON({
+      endpoint: "anglerWide", // <- adjust this if your endpoint name differs
+      event_id: state.currentEventId
+    });
+
+    const rows = data.rows || data.anglers || [];
+    state.currentAnglers = rows;
+
+    renderEventMeta();
+    renderAnglerTable();
+    setStatus("");
+  } catch (err) {
+    console.error(err);
+    setStatus(`Error loading event detail: ${err.message}`, "error");
+    $("anglerTableContainer").innerHTML =
+      "<p>Failed to load event detail.</p>";
+  }
+}
+
+function renderEventMeta() {
+  const ev = state.currentEventMeta || {};
+  $("detailEventTitle").textContent =
+    ev.event_name || ev.event_id || "Event Detail";
+  $("detailEventSubtitle").textContent = ev.event_id || "";
+
+  $("metaDate").textContent = formatDate(ev.event_date);
+  $("metaTrail").textContent = ev.trail || "–";
+  $("metaSeason").textContent = ev.season || "–";
+  $("metaAnglers").textContent = ev.Anglers ?? ev.anglers ?? "–";
+  $("metaFish").textContent =
+    ev.Total_Fish_Caught ?? ev.total_fish_caught ?? "–";
+  $("metaBigBass").textContent = fmtNumber(
+    ev.big_bass_in ?? ev.Event_Big_Bass ?? ev.big_bass
+  );
+}
+
+function renderAnglerTable() {
+  const container = $("anglerTableContainer");
+  if (!container) return;
+
+  const rows = state.currentAnglers;
+  if (!rows.length) {
+    container.innerHTML = "<p>No angler rows found for this event.</p>";
     return;
   }
 
-  const angler = row.angler || row.Angler || "";
-  const stateAbbr = row.angler_state || row.anglerState || row.state || "";
-  const url = row.angler_url || row.profile_url || "";
-  const rank = row.rank || row.Rank || "";
-  const total = fmtInches(row.total_length_in ?? row.total ?? row.total_in);
-  const big = fmtInches(row.big_bass_in ?? row.big_bass ?? row.bb_in);
-  const day = row.day || "";
-  const fishLimit = row.fish_limit ?? row.limit ?? "";
-  const limitPct = row["Limit%"] ?? row.limit_pct ?? "";
-
-  // Collect fish_1_in..fish_10_in if present
-  const fish = [];
-  for (let i = 1; i <= 10; i++) {
-    const key1 = `fish_${i}_in`;
-    const key2 = `fish${i}_in`;
-    const val = row[key1] ?? row[key2];
-    if (val != null && val !== "") {
-      fish.push(fmtInches(val));
-    }
-  }
-
-  panel.innerHTML = `
-    <h3>Angler Detail</h3>
-    <div class="angler-header">
-      <div class="angler-name">${angler}${stateAbbr ? ` <span class="angler-state">(${stateAbbr})</span>` : ""}</div>
-      ${
-        url
-          ? `<a class="angler-link" href="${url}" target="_blank" rel="noopener noreferrer">View TourneyX Profile</a>`
-          : ""
-      }
-    </div>
-    <div class="angler-grid">
-      <div class="stat-card">
-        <div class="stat-label">Rank</div>
-        <div class="stat-value">${rank || "–"}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Total Length (in)</div>
-        <div class="stat-value">${total || "–"}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Big Bass (in)</div>
-        <div class="stat-value">${big || "–"}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Fish Limit</div>
-        <div class="stat-value">${fishLimit || "–"}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Limit %</div>
-        <div class="stat-value">${limitPct || "–"}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Day</div>
-        <div class="stat-value">${day || "–"}</div>
-      </div>
-    </div>
-    ${
-      fish.length
-        ? `
-      <div class="fish-list">
-        <h4>Fish Caught</h4>
-        <ul>
-          ${fish
-            .map((len, i) => `<li>Fish ${i + 1}: <span>${len}</span></li>`)
-            .join("")}
-        </ul>
-      </div>
-    `
-        : ""
-    }
+  let html = `
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Rank</th>
+          <th>Angler</th>
+          <th>State</th>
+          <th>Fish 1</th>
+          <th>Fish 2</th>
+          <th>Fish 3</th>
+          <th>Fish 4</th>
+          <th>Fish 5</th>
+          <th>Total (in)</th>
+          <th>Big Bass (in)</th>
+          <th>Limit %</th>
+          <th>AOY Points</th>
+        </tr>
+      </thead>
+      <tbody>
   `;
-}
 
-// ===============================
-// TAB HANDLING
-// ===============================
+  rows.forEach((r) => {
+    const rank = r.rank ?? r.Rank ?? "";
+    const angler = r.angler ?? r.Angler ?? "";
+    const state = r.angler_state ?? r.state ?? "";
+    const f1 = fmtNumber(r.fish_1_in ?? r.Fish_1_in);
+    const f2 = fmtNumber(r.fish_2_in ?? r.Fish_2_in);
+    const f3 = fmtNumber(r.fish_3_in ?? r.Fish_3_in);
+    const f4 = fmtNumber(r.fish_4_in ?? r.Fish_4_in);
+    const f5 = fmtNumber(r.fish_5_in ?? r.Fish_5_in);
+    const total = fmtNumber(r.total_length_in ?? r.Total_Length_in);
+    const big = fmtNumber(r.big_bass_in ?? r.Big_Bass_in);
+    const limitPct = r["Limit%"] ?? r.limit_percent ?? "";
+    const aoy = r["AOY Points"] ?? r.aoy_points ?? "";
 
-function setupTabs() {
-  const buttons = document.querySelectorAll(".tab-button");
-  buttons.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const tabKey = btn.dataset.tab;
-      if (!tabKey || tabKey === state.currentTab) return;
-
-      state.currentTab = tabKey;
-
-      // Update active class
-      buttons.forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-
-      // If we already have data, just render; otherwise fetch
-      const rows = state.leaderboards[tabKey];
-      if (rows && rows.length) {
-        renderLeaderboard();
-      } else if (state.currentEventId) {
-        loadLeaderboardForTab(tabKey, state.currentEventId);
-      }
-    });
+    html += `
+      <tr>
+        <td>${rank}</td>
+        <td>${angler}</td>
+        <td>${state}</td>
+        <td>${f1}</td>
+        <td>${f2}</td>
+        <td>${f3}</td>
+        <td>${f4}</td>
+        <td>${f5}</td>
+        <td>${total}</td>
+        <td>${big}</td>
+        <td>${limitPct}</td>
+        <td>${aoy}</td>
+      </tr>
+    `;
   });
+
+  html += `
+      </tbody>
+    </table>
+  `;
+
+  container.innerHTML = html;
 }
 
-// ===============================
-// LOAD LOGIC
-// ===============================
-
-async function loadEventsAndInitial() {
-  try {
-    setStatus("Loading events…", "info");
-    const events = await fetchEvents();
-    if (!events.length) {
-      setStatus("No events returned from API.", "error");
-      return;
-    }
-    state.events = events;
-    state.currentEventId = events[0].event_id;
-
-    renderEventDropdown();
-    setStatus("Loading leaderboard…", "info");
-
-    await Promise.all([
-      loadLeaderboardForTab("total", state.currentEventId),
-      loadLeaderboardForTab("day1", state.currentEventId),
-      loadLeaderboardForTab("day2", state.currentEventId)
-    ]);
-
-    setStatus("", "info");
-  } catch (err) {
-    console.error(err);
-    setStatus(`Error loading data: ${err.message}`, "error");
-  }
-}
-
-async function loadLeaderboardForTab(tabKey, eventId) {
-  try {
-    const rows = await fetchLeaderboard(tabKey, eventId);
-    state.leaderboards[tabKey] = rows;
-
-    if (tabKey === state.currentTab) {
-      renderLeaderboard();
-    }
-  } catch (err) {
-    console.error(err);
-    if (tabKey === state.currentTab) {
-      setStatus(`Error loading ${tabKey} leaderboard: ${err.message}`, "error");
-      renderLeaderboard(); // will show empty-state
-    }
-  }
-}
-
-function setupEventDropdown() {
-  const select = $("eventSelect");
-  if (!select) return;
-
-  select.addEventListener("change", () => {
-    const eventId = select.value;
-    if (!eventId) return;
-
-    state.currentEventId = eventId;
-    setStatus("Loading event data…", "info");
-
-    // Clear existing data
-    state.leaderboards = { total: [], day1: [], day2: [] };
-
-    Promise.all([
-      loadLeaderboardForTab("total", eventId),
-      loadLeaderboardForTab("day1", eventId),
-      loadLeaderboardForTab("day2", eventId)
-    ]).then(() => {
-      setStatus("", "info");
-    });
-  });
-}
-
-// ===============================
-// INIT
-// ===============================
-
+// ===== INIT =====
 document.addEventListener("DOMContentLoaded", () => {
-  setupTabs();
-  setupEventDropdown();
-  loadEventsAndInitial();
+  // back button
+  const backBtn = $("backToEvents");
+  if (backBtn) {
+    backBtn.addEventListener("click", () => {
+      showView("events");
+      setStatus("");
+    });
+  }
+
+  showView("events");
+  loadEvents();
 });
