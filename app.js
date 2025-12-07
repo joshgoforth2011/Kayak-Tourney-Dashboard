@@ -1,5 +1,5 @@
 // ===== CONFIG: set your Apps Script Web App URL here =====
-const API_BASE = https://script.google.com/macros/s/AKfycbwf7HrqElLy4-VzTfrk0ucShXWFT1mITlz1yYBTEzSHD36SYfbso8eQWyqnfvA79Xv4tA/exec;
+const API_BASE = "https://script.google.com/macros/s/AKfycbwf7HrqElLy4-VzTfrk0ucShXWFT1mITlz1yYBTEzSHD36SYfbso8eQWyqnfvA79Xv4tA/exec";
 
 // ===== Global state =====
 const state = {
@@ -345,3 +345,4 @@ async function loadSeasonSummary() {
 
   // For season tab we don't change the right-hand detail panel
 }
+
