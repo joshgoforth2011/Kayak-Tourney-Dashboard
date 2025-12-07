@@ -1,347 +1,414 @@
-// ===== CONFIG: set your Apps Script Web App URL here =====
-const API_BASE = "https://script.google.com/macros/s/AKfycbwf7HrqElLy4-VzTfrk0ucShXWFT1mITlz1yYBTEzSHD36SYfbso8eQWyqnfvA79Xv4tA/exec";
+// ===============================
+// CONFIG
+// ===============================
 
-// ===== Global state =====
+// Your deployed Apps Script web app URL ( /exec )
+const API_BASE =
+  "https://script.google.com/macros/s/AKfycbwf7HrqElLy4-VzTfrk0ucShXWFT1mITlz1yYBTEzSHD36SYfbso8eQWyqnfvA79Xv4tA/exec";
+
+// ===============================
+// GLOBAL STATE
+// ===============================
+
 const state = {
-  events: [],
-  currentEventId: null,
-  currentTab: "total",
-  leaderboard: null,     // {event_id, total, day1, day2}
-  seasonSummary: null    // optional cache
+  events: [],                  // full events list
+  currentEventId: null,        // selected event_id
+  currentTab: "total",         // 'total' | 'day1' | 'day2'
+  leaderboards: {
+    total: [],
+    day1: [],
+    day2: []
+  }
 };
 
-// ===== Entry point =====
-document.addEventListener("DOMContentLoaded", () => {
-  wireTabs();
-  initDashboard().catch(err => setStatus(`Error: ${err.message}`));
-});
+// Small helper to grab elements safely
+function $(id) {
+  return document.getElementById(id);
+}
 
-async function initDashboard() {
-  setStatus("Loading events…");
-  const eventsJson = await fetchJSON("?action=events");
-  if (!eventsJson.success) throw new Error(eventsJson.error || "Events API error");
+// Status message (bottom or wherever you place #statusMessage)
+function setStatus(msg, type = "info") {
+  const el = $("statusMessage");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.className = `status status-${type}`;
+}
 
-  state.events = eventsJson.data.events || [];
-  populateEventDropdown();
+// Format a date string from API into something like "Mar 15, 2025"
+function formatDate(d) {
+  if (!d) return "";
+  const dt = new Date(d);
+  if (isNaN(dt)) return String(d);
+  return dt.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  });
+}
 
-  // auto-select first event
-  if (state.events.length) {
-    state.currentEventId = state.events[0].event_id;
-    document.getElementById("eventSelect").value = state.currentEventId;
-    await loadLeaderboardForCurrentEvent();
+// Format inches with 2 decimals
+function fmtInches(v) {
+  if (v == null || v === "") return "";
+  const num = Number(v);
+  if (isNaN(num)) return v;
+  return num.toFixed(2);
+}
+
+// ===============================
+// API CALLS
+// ===============================
+
+async function callApi(params) {
+  const qs = new URLSearchParams(params);
+  const url = `${API_BASE}?${qs.toString()}`;
+
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} – ${res.statusText}`);
   }
+  const json = await res.json();
+  if (!json || json.success === false) {
+    throw new Error(json && json.message ? json.message : "API error");
+  }
+  return json.data || json; // we expect { success:true, data:{...} }
+}
 
-  document.getElementById("eventSelect").addEventListener("change", async e => {
-    state.currentEventId = e.target.value || null;
-    if (state.currentEventId) {
-      await loadLeaderboardForCurrentEvent();
-    }
+// Events list
+async function fetchEvents() {
+  const data = await callApi({ endpoint: "events" });
+  return data.events || [];
+}
+
+// Leaderboard for an event
+async function fetchLeaderboard(tabKey, eventId) {
+  // Map tab -> endpoint value in Apps Script
+  let endpoint;
+  if (tabKey === "total") endpoint = "leaderboard";
+  else if (tabKey === "day1") endpoint = "day1";
+  else if (tabKey === "day2") endpoint = "day2";
+  else throw new Error(`Unknown tab key: ${tabKey}`);
+
+  const data = await callApi({
+    endpoint,
+    event_id: eventId
   });
 
-  setStatus("Ready.");
+  // Allow for either data.rows or data.leaderboard
+  return data.rows || data.leaderboard || data.items || [];
 }
 
-// ===== Helpers =====
-function fullUrl(path) {
-  return API_BASE + path;
-}
+// ===============================
+// RENDER: EVENTS DROPDOWN
+// ===============================
 
-async function fetchJSON(path) {
-  const res = await fetch(fullUrl(path));
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
+function renderEventDropdown() {
+  const select = $("eventSelect");
+  if (!select) return;
 
-function setStatus(msg) {
-  const el = document.getElementById("statusText");
-  if (el) el.textContent = msg;
-}
-
-function formatNumber(n, decimals = 2) {
-  if (n == null || isNaN(n)) return "–";
-  return Number(n).toFixed(decimals);
-}
-
-function formatInteger(n) {
-  if (n == null || isNaN(n)) return "–";
-  return Number(n).toString();
-}
-
-function formatDate(t) {
-  if (!t) return "–";
-  const d = new Date(t);
-  if (isNaN(d.getTime())) return String(t);
-  return d.toLocaleDateString();
-}
-
-// ===== Tabs =====
-function wireTabs() {
-  const tabs = document.querySelectorAll(".tab");
-  tabs.forEach(tab => {
-    tab.addEventListener("click", async () => {
-      const name = tab.dataset.tab;
-      state.currentTab = name;
-
-      tabs.forEach(t => t.classList.toggle("active", t === tab));
-
-      if (name === "season") {
-        await loadSeasonSummary();
-      } else {
-        // re-render leaderboard table for the current tab
-        renderLeaderboardTable();
-      }
-    });
-  });
-}
-
-// ===== Event dropdown =====
-function populateEventDropdown() {
-  const select = document.getElementById("eventSelect");
   select.innerHTML = "";
 
-  state.events.forEach(evt => {
-    const opt = document.createElement("option");
-    const datePart = evt.event_date ? formatDate(evt.event_date) : "";
-    opt.value = evt.event_id;
-    opt.textContent = `${datePart} – ${evt.event_name || evt.event_id}`;
-    select.appendChild(opt);
-  });
-}
-
-// ===== Leaderboard loading & rendering =====
-async function loadLeaderboardForCurrentEvent() {
-  if (!state.currentEventId) return;
-  setStatus("Loading leaderboard…");
-
-  const json = await fetchJSON(
-    `?action=leaderboard&event_id=${encodeURIComponent(state.currentEventId)}`
+  // Sort events by date desc (latest first)
+  const events = [...state.events].sort(
+    (a, b) => new Date(b.event_date) - new Date(a.event_date)
   );
-  if (!json.success) throw new Error(json.error || "Leaderboard API error");
 
-  state.leaderboard = json.data;
+  for (const ev of events) {
+    const opt = document.createElement("option");
+    opt.value = ev.event_id;
+    const dateLabel = formatDate(ev.event_date);
+    opt.textContent = `${dateLabel} – ${ev.event_name}`;
+    select.appendChild(opt);
+  }
 
-  updateKPIsFromLeaderboard();
-  renderLeaderboardTable();
-
-  setStatus("Ready.");
+  if (events.length && !state.currentEventId) {
+    state.currentEventId = events[0].event_id;
+  }
+  if (state.currentEventId) {
+    select.value = state.currentEventId;
+  }
 }
 
-function getRowsForCurrentTab() {
-  if (!state.leaderboard) return [];
+// ===============================
+// RENDER: LEADERBOARD TABLE
+// ===============================
 
-  if (state.currentTab === "day1") return state.leaderboard.day1 || [];
-  if (state.currentTab === "day2") return state.leaderboard.day2 || [];
-  return state.leaderboard.total || [];
-}
+function renderLeaderboard() {
+  const container = $("leaderboardContainer");
+  if (!container) return;
 
-function renderLeaderboardTable() {
-  const table = document.getElementById("mainTable");
-  table.innerHTML = "";
+  const tabKey = state.currentTab;
+  const rows = state.leaderboards[tabKey] || [];
 
-  const rows = getRowsForCurrentTab();
   if (!rows.length) {
-    table.innerHTML = "<tbody><tr><td>No data for this tab.</td></tr></tbody>";
+    container.innerHTML = `
+      <div class="empty-state">
+        No data available for this event/tab.
+      </div>
+    `;
+    $("anglerDetail") && ( $("anglerDetail").innerHTML = "<h3>Angler Detail</h3><p>Select an angler row to see details.</p>" );
     return;
   }
 
-  // Column configuration
-  const columns = [
-    { key: "rank", label: "#" },
-    { key: "angler", label: "Angler" },
-    { key: "total_length_in", label: 'Total (")', fmt: v => formatNumber(v, 2) },
-    { key: "big_bass_in", label: 'Big Bass (")', fmt: v => formatNumber(v, 2) },
-    { key: "limit_percent", label: "Limit %", fmt: v => v == null ? "–" : formatNumber(v, 0) },
-    { key: "aoy_points", label: "AOY Pts", fmt: v => formatInteger(v) }
-  ];
+  // Build table
+  let html = `
+    <table class="leader-table">
+      <thead>
+        <tr>
+          <th>Rank</th>
+          <th>Angler</th>
+          <th>Total (in)</th>
+          <th>Big Bass (in)</th>
+          <th>Fish Limit</th>
+          <th>Limit %</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
 
-  const thead = document.createElement("thead");
-  const hr = document.createElement("tr");
-  columns.forEach(col => {
-    const th = document.createElement("th");
-    th.textContent = col.label;
-    hr.appendChild(th);
-  });
-  thead.appendChild(hr);
-  table.appendChild(thead);
+  rows.forEach((r, idx) => {
+    const rank = r.rank || r.Rank || r.rk || "";
+    const angler = r.angler || r.Angler || "";
+    const total = fmtInches(r.total_length_in ?? r.total ?? r.total_in);
+    const big = fmtInches(r.big_bass_in ?? r.big_bass ?? r.bb_in);
+    const limit = r.fish_limit ?? r.limit ?? "";
+    const limitPct = r["Limit%"] ?? r.limit_pct ?? "";
 
-  const tbody = document.createElement("tbody");
-
-  rows.forEach((row, index) => {
-    const tr = document.createElement("tr");
-    tr.dataset.rowIndex = index.toString();
-
-    columns.forEach(col => {
-      const td = document.createElement("td");
-      const val = row[col.key];
-      td.textContent = col.fmt ? col.fmt(val) : (val ?? "");
-      tr.appendChild(td);
-    });
-
-    tr.addEventListener("click", () => {
-      // remove active from others
-      tbody.querySelectorAll("tr").forEach(r => r.classList.remove("active-row"));
-      tr.classList.add("active-row");
-      renderAnglerDetail(row);
-    });
-
-    tbody.appendChild(tr);
+    html += `
+      <tr data-row-index="${idx}">
+        <td>${rank}</td>
+        <td>${angler}</td>
+        <td>${total}</td>
+        <td>${big}</td>
+        <td>${limit}</td>
+        <td>${limitPct}</td>
+      </tr>
+    `;
   });
 
-  table.appendChild(tbody);
+  html += `
+      </tbody>
+    </table>
+  `;
 
-  // Optional: auto-select first row
-  const firstRow = tbody.querySelector("tr");
-  if (firstRow) {
-    firstRow.classList.add("active-row");
-    renderAnglerDetail(rows[0]);
+  container.innerHTML = html;
+
+  // Bind row click -> angler detail
+  const tbody = container.querySelector("tbody");
+  if (tbody) {
+    tbody.addEventListener("click", (e) => {
+      const tr = e.target.closest("tr");
+      if (!tr) return;
+      const idx = Number(tr.getAttribute("data-row-index"));
+      const row = rows[idx];
+      if (row) {
+        renderAnglerDetail(row);
+        // highlight selected
+        tbody.querySelectorAll("tr").forEach(r => r.classList.remove("selected"));
+        tr.classList.add("selected");
+      }
+    });
   }
+
+  // Show detail for top row by default
+  renderAnglerDetail(rows[0]);
 }
 
-// ===== KPIs from leaderboard =====
-function updateKPIsFromLeaderboard() {
-  const lb = state.leaderboard;
-  if (!lb) return;
+// ===============================
+// RENDER: ANGLER DETAIL PANEL
+// ===============================
 
-  const totalRows = lb.total || [];
-  const anglers = new Set(totalRows.map(r => r.angler));
-  const fishCount = totalRows.reduce((sum, r) => {
-    let c = 0;
-    for (let i = 1; i <= 10; i++) {
-      const v = r[`fish_${i}_in`];
-      if (v != null && !isNaN(v)) c++;
-    }
-    return sum + c;
-  }, 0);
-
-  const totalLength = totalRows.reduce((sum, r) => sum + (r.total_length_in || 0), 0);
-  const avgLength = fishCount ? totalLength / fishCount : null;
-
-  const bigBass = totalRows.reduce((max, r) => {
-    const bb = r.big_bass_in || 0;
-    return bb > max ? bb : max;
-  }, 0);
-
-  const evtMeta = (state.events || []).find(e => e.event_id === state.currentEventId) || {};
-
-  document.getElementById("kpiAnglers").textContent = formatInteger(anglers.size);
-  document.getElementById("kpiFishCount").textContent = formatInteger(fishCount);
-  document.getElementById("kpiAvgLength").textContent = avgLength ? formatNumber(avgLength, 2) : "–";
-  document.getElementById("kpiBigBass").textContent = bigBass ? formatNumber(bigBass, 2) : "–";
-  document.getElementById("kpiEventDate").textContent = evtMeta.event_date ? formatDate(evtMeta.event_date) : "–";
-  document.getElementById("kpiTrail").textContent = evtMeta.trail || "–";
-}
-
-// ===== Angler detail panel =====
 function renderAnglerDetail(row) {
-  const panel = document.getElementById("anglerDetail");
+  const panel = $("anglerDetail");
+  if (!panel) return;
+
   if (!row) {
-    panel.innerHTML = '<p class="detail-placeholder">Select an angler row.</p>';
+    panel.innerHTML = `
+      <h3>Angler Detail</h3>
+      <p>Select an angler row to see details.</p>
+    `;
     return;
   }
 
-  const fishList = [];
+  const angler = row.angler || row.Angler || "";
+  const stateAbbr = row.angler_state || row.anglerState || row.state || "";
+  const url = row.angler_url || row.profile_url || "";
+  const rank = row.rank || row.Rank || "";
+  const total = fmtInches(row.total_length_in ?? row.total ?? row.total_in);
+  const big = fmtInches(row.big_bass_in ?? row.big_bass ?? row.bb_in);
+  const day = row.day || "";
+  const fishLimit = row.fish_limit ?? row.limit ?? "";
+  const limitPct = row["Limit%"] ?? row.limit_pct ?? "";
+
+  // Collect fish_1_in..fish_10_in if present
+  const fish = [];
   for (let i = 1; i <= 10; i++) {
-    const v = row[`fish_${i}_in`];
-    if (v != null && !isNaN(v)) fishList.push(Number(v));
+    const key1 = `fish_${i}_in`;
+    const key2 = `fish${i}_in`;
+    const val = row[key1] ?? row[key2];
+    if (val != null && val !== "") {
+      fish.push(fmtInches(val));
+    }
   }
 
   panel.innerHTML = `
-    <div class="detail-row">
-      <span class="detail-label">Angler:</span>
-      <span>${row.angler || ""}</span>
-    </div>
-    <div class="detail-row">
-      <span class="detail-label">State:</span>
-      <span>${row.angler_state || "–"}</span>
-    </div>
-    <div class="detail-row">
-      <span class="detail-label">Total Length:</span>
-      <span>${formatNumber(row.total_length_in, 2)}"</span>
-    </div>
-    <div class="detail-row">
-      <span class="detail-label">Big Bass:</span>
-      <span>${formatNumber(row.big_bass_in, 2)}"</span>
-    </div>
-    <div class="detail-row">
-      <span class="detail-label">Day:</span>
-      <span>${row.day || "–"}</span>
-    </div>
-    <div class="detail-row">
-      <span class="detail-label">Trail:</span>
-      <span>${row.trail || "–"}</span>
-    </div>
-    <div class="detail-row">
-      <span class="detail-label">Profile:</span>
+    <h3>Angler Detail</h3>
+    <div class="angler-header">
+      <div class="angler-name">${angler}${stateAbbr ? ` <span class="angler-state">(${stateAbbr})</span>` : ""}</div>
       ${
-        row.angler_url
-          ? `<a href="${row.angler_url}" target="_blank" rel="noopener noreferrer">${row.angler_url}</a>`
-          : "<span>–</span>"
+        url
+          ? `<a class="angler-link" href="${url}" target="_blank" rel="noopener noreferrer">View TourneyX Profile</a>`
+          : ""
       }
     </div>
-    <div class="detail-row">
-      <span class="detail-label">Fish:</span>
-      ${
-        fishList.length
-          ? fishList.map(v => `<span class="badge">${formatNumber(v, 2)}"</span>`).join(" ")
-          : "<span>None recorded</span>"
-      }
+    <div class="angler-grid">
+      <div class="stat-card">
+        <div class="stat-label">Rank</div>
+        <div class="stat-value">${rank || "–"}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Length (in)</div>
+        <div class="stat-value">${total || "–"}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Big Bass (in)</div>
+        <div class="stat-value">${big || "–"}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Fish Limit</div>
+        <div class="stat-value">${fishLimit || "–"}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Limit %</div>
+        <div class="stat-value">${limitPct || "–"}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Day</div>
+        <div class="stat-value">${day || "–"}</div>
+      </div>
     </div>
+    ${
+      fish.length
+        ? `
+      <div class="fish-list">
+        <h4>Fish Caught</h4>
+        <ul>
+          ${fish
+            .map((len, i) => `<li>Fish ${i + 1}: <span>${len}</span></li>`)
+            .join("")}
+        </ul>
+      </div>
+    `
+        : ""
+    }
   `;
 }
 
-// ===== Season summary tab (optional) =====
-async function loadSeasonSummary() {
-  if (!state.seasonSummary) {
-    setStatus("Loading season summary…");
-    const json = await fetchJSON("?action=seasonSummary");
-    if (!json.success) throw new Error(json.error || "Season summary API error");
-    state.seasonSummary = json.data.seasonSummary || [];
-    setStatus("Ready.");
-  }
+// ===============================
+// TAB HANDLING
+// ===============================
 
-  const table = document.getElementById("mainTable");
-  table.innerHTML = "";
+function setupTabs() {
+  const buttons = document.querySelectorAll(".tab-button");
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tabKey = btn.dataset.tab;
+      if (!tabKey || tabKey === state.currentTab) return;
 
-  const rows = state.seasonSummary;
-  if (!rows.length) {
-    table.innerHTML = "<tbody><tr><td>No season summary data.</td></tr></tbody>";
-    return;
-  }
+      state.currentTab = tabKey;
 
-  const columns = [
-    { key: "season", label: "Season" },
-    { key: "trail", label: "Trail" },
-    { key: "angler", label: "Angler" },
-    { key: "events_fished", label: "Events", fmt: v => formatInteger(v) },
-    { key: "wins", label: "Wins", fmt: v => formatInteger(v) },
-    { key: "top5_finishes", label: "Top 5", fmt: v => formatInteger(v) },
-    { key: "top10_finishes", label: "Top 10", fmt: v => formatInteger(v) },
-    { key: "season_total_length_in", label: 'Total (")', fmt: v => formatNumber(v, 2) },
-    { key: "avg_finish", label: "Avg Finish", fmt: v => formatNumber(v, 2) }
-  ];
+      // Update active class
+      buttons.forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
 
-  const thead = document.createElement("thead");
-  const hr = document.createElement("tr");
-  columns.forEach(c => {
-    const th = document.createElement("th");
-    th.textContent = c.label;
-    hr.appendChild(th);
-  });
-  thead.appendChild(hr);
-  table.appendChild(thead);
-
-  const tbody = document.createElement("tbody");
-  rows.forEach(r => {
-    const tr = document.createElement("tr");
-    columns.forEach(c => {
-      const td = document.createElement("td");
-      const val = r[c.key];
-      td.textContent = c.fmt ? c.fmt(val) : (val ?? "");
-      tr.appendChild(td);
+      // If we already have data, just render; otherwise fetch
+      const rows = state.leaderboards[tabKey];
+      if (rows && rows.length) {
+        renderLeaderboard();
+      } else if (state.currentEventId) {
+        loadLeaderboardForTab(tabKey, state.currentEventId);
+      }
     });
-    tbody.appendChild(tr);
   });
-  table.appendChild(tbody);
-
-  // For season tab we don't change the right-hand detail panel
 }
+
+// ===============================
+// LOAD LOGIC
+// ===============================
+
+async function loadEventsAndInitial() {
+  try {
+    setStatus("Loading events…", "info");
+    const events = await fetchEvents();
+    if (!events.length) {
+      setStatus("No events returned from API.", "error");
+      return;
+    }
+    state.events = events;
+    state.currentEventId = events[0].event_id;
+
+    renderEventDropdown();
+    setStatus("Loading leaderboard…", "info");
+
+    await Promise.all([
+      loadLeaderboardForTab("total", state.currentEventId),
+      loadLeaderboardForTab("day1", state.currentEventId),
+      loadLeaderboardForTab("day2", state.currentEventId)
+    ]);
+
+    setStatus("", "info");
+  } catch (err) {
+    console.error(err);
+    setStatus(`Error loading data: ${err.message}`, "error");
+  }
+}
+
+async function loadLeaderboardForTab(tabKey, eventId) {
+  try {
+    const rows = await fetchLeaderboard(tabKey, eventId);
+    state.leaderboards[tabKey] = rows;
+
+    if (tabKey === state.currentTab) {
+      renderLeaderboard();
+    }
+  } catch (err) {
+    console.error(err);
+    if (tabKey === state.currentTab) {
+      setStatus(`Error loading ${tabKey} leaderboard: ${err.message}`, "error");
+      renderLeaderboard(); // will show empty-state
+    }
+  }
+}
+
+function setupEventDropdown() {
+  const select = $("eventSelect");
+  if (!select) return;
+
+  select.addEventListener("change", () => {
+    const eventId = select.value;
+    if (!eventId) return;
+
+    state.currentEventId = eventId;
+    setStatus("Loading event data…", "info");
+
+    // Clear existing data
+    state.leaderboards = { total: [], day1: [], day2: [] };
+
+    Promise.all([
+      loadLeaderboardForTab("total", eventId),
+      loadLeaderboardForTab("day1", eventId),
+      loadLeaderboardForTab("day2", eventId)
+    ]).then(() => {
+      setStatus("", "info");
+    });
+  });
+}
+
+// ===============================
+// INIT
+// ===============================
+
+document.addEventListener("DOMContentLoaded", () => {
+  setupTabs();
+  setupEventDropdown();
+  loadEventsAndInitial();
+});
