@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Kayak Tournament Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <header>
+    <h1>Kayak Tournament Dashboard</h1>
+    <div>
+      <label for="eventSelect">Event:</label>
+      <select id="eventSelect"></select>
+    </div>
+  </header>
+
+  <main>
+    <div class="tabs">
+      <div class="tab active" data-tab="total">Total Leaderboard</div>
+      <div class="tab" data-tab="day1">Day 1</div>
+      <div class="tab" data-tab="day2">Day 2</div>
+    </div>
+
+    <div id="total" class="tab-content active">
+      <table id="totalTable"></table>
+    </div>
+
+    <div id="day1" class="tab-content">
+      <table id="day1Table"></table>
+    </div>
+
+    <div id="day2" class="tab-content">
+      <table id="day2Table"></table>
+    </div>
+
+    <aside id="anglerPanel">
+      <h2>Angler Detail</h2>
+      <div id="anglerDetail"></div>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
