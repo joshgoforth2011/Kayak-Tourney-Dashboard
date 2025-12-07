@@ -345,5 +345,3 @@ async function loadSeasonSummary() {
 
   // For season tab we don't change the right-hand detail panel
 }
-
-
